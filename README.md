@@ -33,9 +33,7 @@
 
 **最近关注 · Recent stars**
 
-- [datawhalechina/easy-rl](https://github.com/datawhalechina/easy-rl) · 2026-10-11
-- [THUDM/slime](https://github.com/THUDM/slime) · 2026-10-10
-- [SandAI-org/MagiAttention](https://github.com/SandAI-org/MagiAttention) · 2026-10-08
+最近 90 日暂无新的公开星标。
 
 <!-- PUBLIC-SIGNALS:END -->
 
