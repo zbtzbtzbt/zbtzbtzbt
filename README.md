@@ -25,16 +25,14 @@
 
 <img src="assets/stack.svg" alt="Python, C++, CUDA, PyTorch, Megatron-LM, NCCL — current technical focus" width="100%" />
 
-### Recent signals / 近 90 日公开动态
-
-<img src="assets/activity.svg" alt="Recent public GitHub signals in a rolling 90-day window; stars and code/discussion events; automatic profile updates excluded" width="100%" />
-
 <!-- PUBLIC-SIGNALS:START -->
 
-**最近关注 · Recent stars**
+### Building forward / 接下来
 
-最近 90 日暂无新的公开星标。
+<img src="assets/activity.svg?v=bd58b1afbbfa" alt="Training systems focus and recent public updates" width="100%" />
+
+继续深入训练系统，开展 GPU 性能实验，整理 LLM / VLM 论文解析；用可复核的实现与实验记录持续进展。
 
 <!-- PUBLIC-SIGNALS:END -->
 
-<sub>星标表示关注；fork 改动和公开 PR 分别展示。这里逐步沉淀训练系统、论文阅读与工程探索。</sub>
+<sub>从系统问题出发，留下可复现的实验、工程记录与论文理解。</sub>

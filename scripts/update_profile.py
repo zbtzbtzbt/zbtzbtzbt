@@ -9,6 +9,7 @@ never printed or written to disk.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -322,12 +323,26 @@ def collect(api: GitHub, now: datetime) -> Snapshot:
 
 
 def signals_markdown(snapshot: Snapshot) -> str:
-    lines = ["**最近关注 · Recent stars**", ""]
+    version = hashlib.sha256(activity_svg(snapshot).encode("utf-8")).hexdigest()[:12]
+    image = (
+        f'<img src="assets/activity.svg?v={version}" '
+        'alt="Training systems focus and recent public updates" width="100%" />'
+    )
+    if not snapshot.stars and not snapshot.events and not snapshot.prs:
+        return "\n".join(
+            [
+                "### Building forward / 接下来",
+                "",
+                image,
+                "",
+                "继续深入训练系统，开展 GPU 性能实验，整理 LLM / VLM 论文解析；用可复核的实现与实验记录持续进展。",
+            ]
+        )
+    lines = ["### Recent signals / 近 90 日公开动态", "", image]
     if snapshot.stars:
+        lines.extend(["", "**最近关注 · Recent stars**", ""])
         for star in snapshot.stars[:3]:
             lines.append(f"- [{markdown_text(star.name)}]({star.url}) · {local_date(star.at)}")
-    else:
-        lines.append("最近 90 日暂无新的公开星标。")
     if snapshot.prs:
         lines.extend(["", "**近期公开 PR · Recent public PRs**", ""])
         for pr in snapshot.prs:
@@ -361,7 +376,45 @@ def weekly_counts(snapshot: Snapshot) -> tuple[list[int], list[int]]:
     return stars, events
 
 
+def building_forward_svg() -> str:
+    """A direction card for an empty public snapshot, without invented activity."""
+    return '''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="200" viewBox="0 0 1280 200" role="img" aria-labelledby="title description">
+  <title id="title">Building forward — training systems focus</title>
+  <desc id="description">Training systems. Measured progress. Focus on distributed training, GPU performance, and LLM / VLM.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1"><stop stop-color="#080d18"/><stop offset="1" stop-color="#10172a"/></linearGradient>
+    <radialGradient id="cyanHalo"><stop stop-color="#28c8d8" stop-opacity=".13"/><stop offset="1" stop-color="#28c8d8" stop-opacity="0"/></radialGradient>
+    <radialGradient id="violetHalo"><stop stop-color="#9e7ae8" stop-opacity=".11"/><stop offset="1" stop-color="#9e7ae8" stop-opacity="0"/></radialGradient>
+    <linearGradient id="accent" x2="0" y2="1"><stop stop-color="#67e3ed"/><stop offset="1" stop-color="#a48bf2"/></linearGradient>
+    <clipPath id="bounds"><rect width="1280" height="200" rx="18"/></clipPath>
+  </defs>
+  <g clip-path="url(#bounds)">
+    <rect width="1280" height="200" fill="url(#background)"/>
+    <ellipse cx="1120" cy="20" rx="270" ry="185" fill="url(#cyanHalo)"/>
+    <ellipse cx="1240" cy="205" rx="310" ry="190" fill="url(#violetHalo)"/>
+    <path d="M1105-40C1000 30 1000 170 1105 240M1160-40C1055 30 1055 170 1160 240M1215-40C1110 30 1110 170 1215 240" fill="none" stroke="#82b5d1" stroke-opacity=".07" stroke-width="1"/>
+    <rect x="1220" y="40" width="3" height="120" rx="1.5" fill="url(#accent)" opacity=".65"/>
+    <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+      <text x="64" y="37" fill="#80e5ed" font-size="13" font-weight="600" letter-spacing="2.5">BUILDING FORWARD</text>
+      <text x="63" y="95" fill="#edf4ff" font-size="41" font-weight="600" letter-spacing="-.75">Training systems. Measured progress.</text>
+      <g font-size="15" font-weight="500">
+        <rect x="64" y="126" width="223" height="38" rx="8" fill="#102333" stroke="#3d7488" stroke-opacity=".5"/>
+        <text x="83" y="151" fill="#8ce5ed">Distributed training</text>
+        <rect x="301" y="126" width="206" height="38" rx="8" fill="#182139" stroke="#66658e" stroke-opacity=".45"/>
+        <text x="320" y="151" fill="#c8bcf7">GPU performance</text>
+        <rect x="521" y="126" width="155" height="38" rx="8" fill="#131f32" stroke="#526987" stroke-opacity=".45"/>
+        <text x="540" y="151" fill="#a9bfdb">LLM / VLM</text>
+      </g>
+    </g>
+    <rect x=".5" y=".5" width="1279" height="199" rx="17.5" fill="none" stroke="#52617d" stroke-opacity=".26"/>
+  </g>
+</svg>
+'''
+
+
 def activity_svg(snapshot: Snapshot) -> str:
+    if not snapshot.stars and not snapshot.events and not snapshot.prs:
+        return building_forward_svg()
     stars, events = weekly_counts(snapshot)
     largest = max([s + e for s, e in zip(stars, events)] + [1])
     bars: list[str] = []
