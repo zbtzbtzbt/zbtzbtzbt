@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="200" viewBox="0 0 1280 200" role="img" aria-labelledby="title description">
+  <title id="title">Recent public GitHub signals</title>
+  <desc id="description">Last 90 days: 19 recently starred projects and 0 public code or discussion events. Latest public signal: 2026-10-11. A 13-bin graph shows stars and code or discussion events separately. Profile updates and fork pushes are excluded.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1"><stop stop-color="#080d18"/><stop offset="1" stop-color="#10172a"/></linearGradient>
+  </defs>
+  <rect width="1280" height="200" rx="18" fill="url(#background)"/>
+  <rect x=".5" y=".5" width="1279" height="199" rx="17.5" fill="none" stroke="#52617d" stroke-opacity=".26"/>
+  <path d="M677 32V166" stroke="#455570" stroke-opacity=".35"/>
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="64" y="35" fill="#94a9c4" font-size="12" font-weight="600" letter-spacing="1.8">PUBLIC SIGNALS / LAST 90 DAYS</text>
+    <text x="64" y="100" fill="#80e5ef" font-size="52" font-weight="650">19</text>
+    <text x="161" y="86" fill="#dbe8f8" font-size="23">recently starred projects</text>
+    <text x="64" y="138" fill="#aebed4" font-size="19">Training systems · GPU performance · RL</text>
+    <text x="64" y="176" fill="#7d91ad" font-size="13">Latest public signal · 2026-10-11</text>
+    <text x="730" y="35" fill="#c9d7e9" font-size="16" font-weight="500">Stars + code/discussion events</text>
+    <rect x="730" y="51" width="8" height="8" rx="2" fill="#66dce9"/>
+    <text x="747" y="59" fill="#94a9c4" font-size="12">Stars</text>
+    <rect x="813" y="51" width="8" height="8" rx="2" fill="#a78bfa"/>
+    <text x="830" y="59" fill="#94a9c4" font-size="12">Code / discussion</text>
+    <text x="1173" y="59" text-anchor="end" fill="#7d91ad" font-size="11">13 rolling weeks</text>
+    <path d="M730 145H1173" stroke="#324058" stroke-opacity=".7"/>
+    <g><title>Rolling week 1: 0 stars, 0 code/discussion events</title>
+    <rect x="730" y="142" width="23" height="2" rx="1" fill="#27364c"/>
+    </g>
+    <g><title>Rolling week 2: 0 stars, 0 code/discussion events</title>
+    <rect x="765" y="142" width="23" height="2" rx="1" fill="#27364c"/>
+    </g>
+    <g><title>Rolling week 3: 0 stars, 0 code/discussion events</title>
+    <rect x="800" y="142" width="23" height="2" rx="1" fill="#27364c"/>
+    </g>
+    <g><title>Rolling week 4: 0 stars, 0 code/discussion events</title>
+    <rect x="835" y="142" width="23" height="2" rx="1" fill="#27364c"/>
+    </g>
+    <g><title>Rolling week 5: 0 stars, 0 code/discussion events</title>
+    <rect x="870" y="142" width="23" height="2" rx="1" fill="#27364c"/>
+    </g>
+    <g><title>Rolling week 6: 0 stars, 0 code/discussion events</title>
+    <rect x="905" y="142" width="23" height="2" rx="1" fill="#27364c"/>
+    </g>
+    <g><title>Rolling week 7: 0 stars, 0 code/discussion events</title>
+    <rect x="940" y="142" width="23" height="2" rx="1" fill="#27364c"/>
+    </g>
+    <g><title>Rolling week 8: 6 stars, 0 code/discussion events</title>
+    <rect x="975" y="74.00" width="23" height="70.00" rx="2" fill="#66dce9"/>
+    </g>
+    <g><title>Rolling week 9: 5 stars, 0 code/discussion events</title>
+    <rect x="1010" y="85.67" width="23" height="58.33" rx="2" fill="#66dce9"/>
+    </g>
+    <g><title>Rolling week 10: 4 stars, 0 code/discussion events</title>
+    <rect x="1045" y="97.33" width="23" height="46.67" rx="2" fill="#66dce9"/>
+    </g>
+    <g><title>Rolling week 11: 1 stars, 0 code/discussion events</title>
+    <rect x="1080" y="132.33" width="23" height="11.67" rx="2" fill="#66dce9"/>
+    </g>
+    <g><title>Rolling week 12: 0 stars, 0 code/discussion events</title>
+    <rect x="1115" y="142" width="23" height="2" rx="1" fill="#27364c"/>
+    </g>
+    <g><title>Rolling week 13: 3 stars, 0 code/discussion events</title>
+    <rect x="1150" y="109.00" width="23" height="35.00" rx="2" fill="#66dce9"/>
+    </g>
+    <text x="730" y="165" fill="#7d91ad" font-size="11">Earlier</text>
+    <text x="1173" y="165" text-anchor="end" fill="#7d91ad" font-size="11">Recent</text>
+    <text x="730" y="184" fill="#7185a1" font-size="10">Public events only · profile updates &amp; fork syncs excluded</text>
+  </g>
+</svg>

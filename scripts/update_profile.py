@@ -1,0 +1,482 @@
+#!/usr/bin/env python3
+"""Refresh a public-only profile snapshot using the Python standard library.
+
+Only the activity SVG and the PUBLIC-SIGNALS block in README.md are updated.
+API failures leave the previous files intact. Tokens and raw API responses are
+never printed or written to disk.
+"""
+
+from __future__ import annotations
+
+import argparse
+import html
+import json
+import os
+import re
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+
+API_BASE = "https://api.github.com"
+USER = "zbtzbtzbt"
+PROFILE_REPO = f"{USER}/{USER}"
+DISPLAY_TZ = ZoneInfo("Asia/Shanghai")
+CODE_TYPES = frozenset(
+    {"PushEvent", "PullRequestEvent", "IssuesEvent", "IssueCommentEvent"}
+)
+START = "<!-- PUBLIC-SIGNALS:START -->"
+END = "<!-- PUBLIC-SIGNALS:END -->"
+REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+
+
+class ProfileError(Exception):
+    """A safe, human-readable failure without credentials or response bodies."""
+
+
+def timestamp(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise ProfileError("GitHub returned a missing or invalid timestamp.")
+    try:
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ProfileError("GitHub returned an invalid timestamp.") from error
+    if result.tzinfo is None:
+        raise ProfileError("GitHub returned a timestamp without a timezone.")
+    return result.astimezone(timezone.utc)
+
+
+def local_date(value: datetime) -> str:
+    return value.astimezone(DISPLAY_TZ).strftime("%Y-%m-%d")
+
+
+def repo_name(value: object) -> str:
+    if not isinstance(value, str) or not REPO_PATTERN.fullmatch(value):
+        raise ProfileError("GitHub returned an invalid repository identifier.")
+    return value
+
+
+def github_url(value: object, expected_path: str) -> str:
+    if not isinstance(value, str):
+        raise ProfileError("GitHub returned an invalid public URL.")
+    parsed = urllib.parse.urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "github.com"
+        or parsed.path.rstrip("/") != expected_path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ProfileError("GitHub returned an unexpected public URL.")
+    return value
+
+
+def markdown_text(value: str) -> str:
+    # A public issue title is content, never README markup or an instruction.
+    text = html.escape(" ".join(value.split()), quote=False)
+    text = text.replace("\\", "\\\\")
+    for character in "[]*_`|~":
+        text = text.replace(character, "\\" + character)
+    return text
+
+
+class GitHub:
+    def __init__(self) -> None:
+        self.token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+
+    def get(
+        self,
+        path: str,
+        params: dict[str, object] | None = None,
+        accept: str = "application/vnd.github+json",
+    ) -> object:
+        if not path.startswith("/") or "?" in path or "#" in path:
+            raise ProfileError("Invalid GitHub API request path.")
+        url = API_BASE + path
+        if params:
+            url += "?" + urllib.parse.urlencode(params)
+        headers = {
+            "Accept": accept,
+            "User-Agent": "zbt-public-profile-updater",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if self.token:
+            headers["Authorization"] = "Bearer " + self.token
+        request = urllib.request.Request(url, headers=headers)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                status = error.code
+                error.close()
+                if status in {429, 502, 503, 504} and attempt < 2:
+                    time.sleep(2**attempt)
+                    continue
+                raise ProfileError(
+                    f"GitHub API request failed with HTTP {status}; snapshot preserved."
+                ) from None
+            except (urllib.error.URLError, TimeoutError):
+                if attempt < 2:
+                    time.sleep(2**attempt)
+                    continue
+                raise ProfileError(
+                    "GitHub API network request failed; snapshot preserved."
+                ) from None
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise ProfileError(
+                    "GitHub returned invalid JSON; snapshot preserved."
+                ) from None
+        raise ProfileError("GitHub API request did not complete.")
+
+
+@dataclass(frozen=True)
+class Star:
+    name: str
+    url: str
+    at: datetime
+
+
+@dataclass(frozen=True)
+class PublicEvent:
+    identifier: str
+    at: datetime
+
+
+@dataclass(frozen=True)
+class PullRequest:
+    title: str
+    url: str
+    at: datetime
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    stars: tuple[Star, ...]
+    events: tuple[PublicEvent, ...]
+    prs: tuple[PullRequest, ...]
+    pr_count: int
+    events_limited: bool
+    now: datetime
+
+
+def collect_stars(api: GitHub, cutoff: datetime, now: datetime) -> tuple[Star, ...]:
+    found: dict[str, Star] = {}
+    page = 1
+    while True:
+        entries = api.get(
+            f"/users/{USER}/starred",
+            {"sort": "created", "direction": "desc", "per_page": 100, "page": page},
+            accept="application/vnd.github.star+json",
+        )
+        if not isinstance(entries, list):
+            raise ProfileError("GitHub returned an invalid starred-project list.")
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ProfileError("GitHub returned an invalid starred-project entry.")
+            at = timestamp(entry.get("starred_at"))
+            repo = entry.get("repo")
+            if not isinstance(repo, dict):
+                raise ProfileError("GitHub returned invalid starred-project metadata.")
+            # Test visibility before reading or rendering any repository identifier.
+            if repo.get("private") is not False or not cutoff <= at <= now:
+                continue
+            name = repo_name(repo.get("full_name"))
+            url = github_url(repo.get("html_url"), "/" + name)
+            found[name] = Star(name, url, at)
+        if len(entries) < 100 or timestamp(entries[-1].get("starred_at")) < cutoff:
+            break
+        page += 1
+    return tuple(sorted(found.values(), key=lambda star: (star.at, star.name), reverse=True))
+
+
+def collect_events(
+    api: GitHub, cutoff: datetime, now: datetime
+) -> tuple[tuple[PublicEvent, ...], bool]:
+    found: dict[str, PublicEvent] = {}
+    repo_metadata: dict[str, dict[str, object]] = {}
+    limited = False
+    for page in range(1, 4):
+        entries = api.get(
+            f"/users/{USER}/events/public", {"per_page": 100, "page": page}
+        )
+        if not isinstance(entries, list):
+            raise ProfileError("GitHub returned an invalid public-event list.")
+        for event in entries:
+            if not isinstance(event, dict):
+                raise ProfileError("GitHub returned an invalid public-event entry.")
+            actor = event.get("actor")
+            if not isinstance(actor, dict):
+                raise ProfileError("GitHub returned invalid event actor metadata.")
+            login = actor.get("login")
+            if (
+                event.get("public") is not True
+                or not isinstance(login, str)
+                or login.casefold() != USER.casefold()
+                or login.casefold().endswith("[bot]")
+                or actor.get("type") == "Bot"
+                or event.get("type") not in CODE_TYPES
+            ):
+                continue
+            at = timestamp(event.get("created_at"))
+            if not cutoff <= at <= now:
+                continue
+            repo = event.get("repo")
+            if not isinstance(repo, dict):
+                raise ProfileError("GitHub returned invalid event repository metadata.")
+            name = repo_name(repo.get("name"))
+            if name.casefold() == PROFILE_REPO.casefold():
+                continue
+            if event.get("type") == "PushEvent":
+                # A fork's push may only mirror upstream. Public PRs and discussions
+                # remain eligible, but fork pushes are conservatively excluded.
+                if name not in repo_metadata:
+                    metadata = api.get("/repos/" + name)
+                    if not isinstance(metadata, dict):
+                        raise ProfileError("GitHub returned invalid push repository metadata.")
+                    repo_metadata[name] = metadata
+                metadata = repo_metadata[name]
+                if metadata.get("private") is not False or metadata.get("fork") is not False:
+                    continue
+            identifier = event.get("id")
+            if not isinstance(identifier, str) or not identifier:
+                raise ProfileError("GitHub returned an invalid public-event identifier.")
+            found[identifier] = PublicEvent(identifier, at)
+        if len(entries) < 100:
+            break
+        if timestamp(entries[-1].get("created_at")) < cutoff:
+            break
+        if page == 3:
+            limited = True
+    return tuple(sorted(found.values(), key=lambda event: event.at, reverse=True)), limited
+
+
+def collect_prs(
+    api: GitHub, cutoff: datetime, now: datetime
+) -> tuple[tuple[PullRequest, ...], int]:
+    query = (
+        f"author:{USER} type:pr is:public "
+        f"created:>={cutoff.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    )
+    payload = api.get(
+        "/search/issues",
+        {"q": query, "sort": "created", "order": "desc", "per_page": 3},
+    )
+    if not isinstance(payload, dict) or payload.get("incomplete_results") is not False:
+        raise ProfileError("GitHub PR search was incomplete; snapshot preserved.")
+    total = payload.get("total_count")
+    items = payload.get("items")
+    if type(total) is not int or total < 0 or not isinstance(items, list) or len(items) > total:
+        raise ProfileError("GitHub returned invalid public PR search results.")
+    found: list[PullRequest] = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("pull_request"), dict):
+            raise ProfileError("GitHub returned an invalid public PR entry.")
+        title = item.get("title")
+        url = item.get("html_url")
+        if not isinstance(title, str) or not isinstance(url, str):
+            raise ProfileError("GitHub returned invalid public PR text.")
+        path = urllib.parse.urlsplit(url).path
+        if not re.fullmatch(r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+", path):
+            raise ProfileError("GitHub returned an invalid public PR URL.")
+        github_url(url, path)
+        at = timestamp(item.get("created_at"))
+        if not cutoff <= at <= now:
+            raise ProfileError("GitHub PR search returned a result outside the requested window.")
+        found.append(PullRequest(title, url, at))
+    return tuple(sorted(found, key=lambda pr: pr.at, reverse=True)[:3]), total
+
+
+def collect(api: GitHub, now: datetime) -> Snapshot:
+    now = now.astimezone(timezone.utc).replace(microsecond=0)
+    cutoff = now - timedelta(days=90)
+    stars = collect_stars(api, cutoff, now)
+    events, limited = collect_events(api, cutoff, now)
+    prs, pr_count = collect_prs(api, cutoff, now)
+    return Snapshot(stars, events, prs, pr_count, limited, now)
+
+
+def signals_markdown(snapshot: Snapshot) -> str:
+    lines = ["**最近关注 · Recent stars**", ""]
+    if snapshot.stars:
+        for star in snapshot.stars[:3]:
+            lines.append(f"- [{markdown_text(star.name)}]({star.url}) · {local_date(star.at)}")
+    else:
+        lines.append("最近 90 日暂无新的公开星标。")
+    if snapshot.pr_count:
+        lines.extend(["", "**近期公开 PR · Recent public PRs**", ""])
+        for pr in snapshot.prs:
+            title = " ".join(pr.title.split())
+            if len(title) > 140:
+                title = title[:137] + "…"
+            lines.append(f"- [{markdown_text(title)}]({pr.url}) · {local_date(pr.at)}")
+    return "\n".join(lines)
+
+
+def update_readme(readme: str, snapshot: Snapshot) -> str:
+    if readme.count(START) != 1 or readme.count(END) != 1:
+        raise ProfileError("README must contain exactly one PUBLIC-SIGNALS marker pair.")
+    begin = readme.index(START) + len(START)
+    end = readme.index(END)
+    if end < begin:
+        raise ProfileError("README PUBLIC-SIGNALS markers are in the wrong order.")
+    return readme[:begin] + "\n\n" + signals_markdown(snapshot) + "\n\n" + readme[end:]
+
+
+def weekly_counts(snapshot: Snapshot) -> tuple[list[int], list[int]]:
+    stars = [0] * 13
+    events = [0] * 13
+    for entries, counts in ((snapshot.stars, stars), (snapshot.events, events)):
+        for entry in entries:
+            age = (snapshot.now - entry.at).total_seconds()
+            # Thirteen seven-day bins cover the 90-day window; the oldest bin is
+            # partial. WatchEvent is never counted again as a code event.
+            index = 12 - min(int(age // (7 * 24 * 60 * 60)), 12)
+            counts[index] += 1
+    return stars, events
+
+
+def activity_svg(snapshot: Snapshot) -> str:
+    stars, events = weekly_counts(snapshot)
+    largest = max([s + e for s, e in zip(stars, events)] + [1])
+    bars: list[str] = []
+    for index, (star_count, event_count) in enumerate(zip(stars, events)):
+        x = 730 + index * 35
+        star_height = 70 * star_count / largest
+        event_height = 70 * event_count / largest
+        title = html.escape(
+            f"Rolling week {index + 1}: {star_count} stars, {event_count} code/discussion events",
+            quote=True,
+        )
+        bars.append(f'<g><title>{title}</title>')
+        if star_count + event_count == 0:
+            bars.append(f'<rect x="{x}" y="142" width="23" height="2" rx="1" fill="#27364c"/>')
+        if star_count:
+            bars.append(
+                f'<rect x="{x}" y="{144-star_height:.2f}" width="23" '
+                f'height="{star_height:.2f}" rx="2" fill="#66dce9"/>'
+            )
+        if event_count:
+            bars.append(
+                f'<rect x="{x}" y="{144-star_height-event_height:.2f}" width="23" '
+                f'height="{event_height:.2f}" rx="2" fill="#a78bfa"/>'
+            )
+        bars.append("</g>")
+    signal_times = [star.at for star in snapshot.stars] + [event.at for event in snapshot.events]
+    latest = local_date(max(signal_times)) if signal_times else "No recent public signals"
+    latest = html.escape(latest, quote=True)
+    event_word = "event" if len(snapshot.events) == 1 else "events"
+    star_label_x = 64 + max(75, len(str(len(snapshot.stars))) * 30) + 22
+    event_label_x = 64 + max(27, len(str(len(snapshot.events))) * 19) + 16
+    if snapshot.events:
+        event_line = (
+            f'<text x="64" y="143" fill="#bca7f7" font-size="30" font-weight="600">{len(snapshot.events)}</text>'
+            f'<text x="{event_label_x}" y="138" fill="#aebed4" font-size="19">public code/discussion {event_word}</text>'
+        )
+    else:
+        event_line = '<text x="64" y="138" fill="#aebed4" font-size="19">Training systems · GPU performance · RL</text>'
+    footer = "Public events only · profile updates &amp; fork syncs excluded"
+    if snapshot.events_limited:
+        footer += " · event feed capped at 300"
+    graph = "\n    ".join(bars)
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="200" viewBox="0 0 1280 200" role="img" aria-labelledby="title description">
+  <title id="title">Recent public GitHub signals</title>
+  <desc id="description">Last 90 days: {len(snapshot.stars)} recently starred projects and {len(snapshot.events)} public code or discussion {event_word}. Latest public signal: {latest}. A 13-bin graph shows stars and code or discussion events separately. Profile updates and fork pushes are excluded.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1"><stop stop-color="#080d18"/><stop offset="1" stop-color="#10172a"/></linearGradient>
+  </defs>
+  <rect width="1280" height="200" rx="18" fill="url(#background)"/>
+  <rect x=".5" y=".5" width="1279" height="199" rx="17.5" fill="none" stroke="#52617d" stroke-opacity=".26"/>
+  <path d="M677 32V166" stroke="#455570" stroke-opacity=".35"/>
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="64" y="35" fill="#94a9c4" font-size="12" font-weight="600" letter-spacing="1.8">PUBLIC SIGNALS / LAST 90 DAYS</text>
+    <text x="64" y="100" fill="#80e5ef" font-size="52" font-weight="650">{len(snapshot.stars)}</text>
+    <text x="{star_label_x}" y="86" fill="#dbe8f8" font-size="23">recently starred projects</text>
+    {event_line}
+    <text x="64" y="176" fill="#7d91ad" font-size="13">Latest public signal · {latest}</text>
+    <text x="730" y="35" fill="#c9d7e9" font-size="16" font-weight="500">Stars + code/discussion events</text>
+    <rect x="730" y="51" width="8" height="8" rx="2" fill="#66dce9"/>
+    <text x="747" y="59" fill="#94a9c4" font-size="12">Stars</text>
+    <rect x="813" y="51" width="8" height="8" rx="2" fill="#a78bfa"/>
+    <text x="830" y="59" fill="#94a9c4" font-size="12">Code / discussion</text>
+    <text x="1173" y="59" text-anchor="end" fill="#7d91ad" font-size="11">13 rolling weeks</text>
+    <path d="M730 145H1173" stroke="#324058" stroke-opacity=".7"/>
+    {graph}
+    <text x="730" y="165" fill="#7d91ad" font-size="11">Earlier</text>
+    <text x="1173" y="165" text-anchor="end" fill="#7d91ad" font-size="11">Recent</text>
+    <text x="730" y="184" fill="#7185a1" font-size="10">{footer}</text>
+  </g>
+</svg>
+'''
+
+
+def write_changes(changes: dict[Path, str]) -> list[str]:
+    # Stage every changed file before replacing any destination. API collection,
+    # SVG generation and README validation have all completed by this point.
+    prepared: list[tuple[Path, str]] = []
+    try:
+        for path, content in changes.items():
+            encoded = content.encode("utf-8")
+            if path.exists() and path.read_bytes() == encoded:
+                continue
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix="." + path.name + ".", dir=path.parent, delete=False
+            ) as temporary:
+                temporary.write(encoded)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_path = temporary.name
+            os.chmod(temporary_path, 0o644)
+            prepared.append((path, temporary_path))
+        for path, temporary_path in prepared:
+            os.replace(temporary_path, path)
+        return [path.name for path, _ in prepared]
+    finally:
+        for _, temporary_path in prepared:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true", help="Collect and validate without writing files.")
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parent.parent
+    readme_path = root / "README.md"
+    readme = readme_path.read_text(encoding="utf-8")
+    if readme.count(START) != 1 or readme.count(END) != 1:
+        raise ProfileError("README must contain exactly one PUBLIC-SIGNALS marker pair.")
+    snapshot = collect(GitHub(), datetime.now(timezone.utc))
+    updated_readme = update_readme(readme, snapshot)
+    svg = activity_svg(snapshot)
+    changes = {root / "assets" / "activity.svg": svg, readme_path: updated_readme}
+    print(
+        f"Public snapshot: {len(snapshot.stars)} recent stars, "
+        f"{len(snapshot.events)} code/discussion events, {snapshot.pr_count} public PRs."
+    )
+    if args.dry_run:
+        print("Dry run complete; no files written.")
+    else:
+        written = write_changes(changes)
+        print("Updated: " + ", ".join(written) if written else "Snapshot unchanged; no files written.")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except ProfileError as error:
+        print(f"Profile update failed: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except OSError:
+        print("Profile update failed: local file operation failed.", file=sys.stderr)
+        raise SystemExit(1) from None
