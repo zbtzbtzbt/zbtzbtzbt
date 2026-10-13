@@ -2,10 +2,6 @@
 
 <p align="center">AI Infra · LLM / VLM Training</p>
 
-<p align="center">
-  <a href="https://www.zhihu.com/people/btty-23">知乎</a>
-</p>
-
 最近主要关注大模型训练，尤其是并行、通信和 GPU 性能。也喜欢数据库。
 
 ## 最近在做
