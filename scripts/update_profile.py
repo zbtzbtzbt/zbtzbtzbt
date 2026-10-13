@@ -162,7 +162,6 @@ class Snapshot:
     stars: tuple[Star, ...]
     events: tuple[PublicEvent, ...]
     prs: tuple[PullRequest, ...]
-    pr_count: int
     events_limited: bool
     now: datetime
 
@@ -197,10 +196,57 @@ def collect_stars(api: GitHub, cutoff: datetime, now: datetime) -> tuple[Star, .
     return tuple(sorted(found.values(), key=lambda star: (star.at, star.name), reverse=True))
 
 
+def event_pull_request(
+    event: dict[str, object], name: str, cutoff: datetime, now: datetime
+) -> PullRequest | None:
+    """Read an authored PR link from a verified public event, never search.
+
+    The public event feed is a sample, not a complete PR history. An action on
+    someone else's PR can be a discussion event but is not an authored PR link.
+    """
+    if event.get("type") != "PullRequestEvent":
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    pr = payload.get("pull_request")
+    if not isinstance(pr, dict):
+        return None
+    author = pr.get("user")
+    if not isinstance(author, dict):
+        return None
+    login = author.get("login")
+    if (
+        not isinstance(login, str)
+        or login.casefold() != USER.casefold()
+        or login.casefold().endswith("[bot]")
+        or author.get("type") == "Bot"
+    ):
+        return None
+    base = pr.get("base")
+    if isinstance(base, dict):
+        base_repo = base.get("repo")
+        if isinstance(base_repo, dict) and base_repo.get("private") is True:
+            return None
+    at = timestamp(pr.get("created_at"))
+    if not cutoff <= at <= now:
+        return None
+    title = pr.get("title")
+    url = pr.get("html_url")
+    if not isinstance(title, str) or not isinstance(url, str):
+        raise ProfileError("GitHub returned invalid public PR text.")
+    path = urllib.parse.urlsplit(url).path.rstrip("/")
+    if not re.fullmatch(re.escape("/" + name) + r"/pull/[0-9]+", path):
+        raise ProfileError("GitHub PR URL does not match its public event repository.")
+    github_url(url, path)
+    return PullRequest(title, "https://github.com" + path, at)
+
+
 def collect_events(
     api: GitHub, cutoff: datetime, now: datetime
-) -> tuple[tuple[PublicEvent, ...], bool]:
+) -> tuple[tuple[PublicEvent, ...], tuple[PullRequest, ...], bool]:
     found: dict[str, PublicEvent] = {}
+    authored_prs: dict[str, PullRequest] = {}
     repo_metadata: dict[str, dict[str, object]] = {}
     limited = False
     for page in range(1, 4):
@@ -249,58 +295,30 @@ def collect_events(
             if not isinstance(identifier, str) or not identifier:
                 raise ProfileError("GitHub returned an invalid public-event identifier.")
             found[identifier] = PublicEvent(identifier, at)
+            pr = event_pull_request(event, name, cutoff, now)
+            if pr is not None:
+                # The newest event is encountered first. Open/close/reopen actions
+                # on one PR yield a single link with the newest available title.
+                authored_prs.setdefault(pr.url, pr)
         if len(entries) < 100:
             break
         if timestamp(entries[-1].get("created_at")) < cutoff:
             break
         if page == 3:
             limited = True
-    return tuple(sorted(found.values(), key=lambda event: event.at, reverse=True)), limited
-
-
-def collect_prs(
-    api: GitHub, cutoff: datetime, now: datetime
-) -> tuple[tuple[PullRequest, ...], int]:
-    query = (
-        f"author:{USER} type:pr is:public "
-        f"created:>={cutoff.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    return (
+        tuple(sorted(found.values(), key=lambda event: event.at, reverse=True)),
+        tuple(sorted(authored_prs.values(), key=lambda pr: (pr.at, pr.url), reverse=True)[:3]),
+        limited,
     )
-    payload = api.get(
-        "/search/issues",
-        {"q": query, "sort": "created", "order": "desc", "per_page": 3},
-    )
-    if not isinstance(payload, dict) or payload.get("incomplete_results") is not False:
-        raise ProfileError("GitHub PR search was incomplete; snapshot preserved.")
-    total = payload.get("total_count")
-    items = payload.get("items")
-    if type(total) is not int or total < 0 or not isinstance(items, list) or len(items) > total:
-        raise ProfileError("GitHub returned invalid public PR search results.")
-    found: list[PullRequest] = []
-    for item in items:
-        if not isinstance(item, dict) or not isinstance(item.get("pull_request"), dict):
-            raise ProfileError("GitHub returned an invalid public PR entry.")
-        title = item.get("title")
-        url = item.get("html_url")
-        if not isinstance(title, str) or not isinstance(url, str):
-            raise ProfileError("GitHub returned invalid public PR text.")
-        path = urllib.parse.urlsplit(url).path
-        if not re.fullmatch(r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+", path):
-            raise ProfileError("GitHub returned an invalid public PR URL.")
-        github_url(url, path)
-        at = timestamp(item.get("created_at"))
-        if not cutoff <= at <= now:
-            raise ProfileError("GitHub PR search returned a result outside the requested window.")
-        found.append(PullRequest(title, url, at))
-    return tuple(sorted(found, key=lambda pr: pr.at, reverse=True)[:3]), total
 
 
 def collect(api: GitHub, now: datetime) -> Snapshot:
     now = now.astimezone(timezone.utc).replace(microsecond=0)
     cutoff = now - timedelta(days=90)
     stars = collect_stars(api, cutoff, now)
-    events, limited = collect_events(api, cutoff, now)
-    prs, pr_count = collect_prs(api, cutoff, now)
-    return Snapshot(stars, events, prs, pr_count, limited, now)
+    events, prs, limited = collect_events(api, cutoff, now)
+    return Snapshot(stars, events, prs, limited, now)
 
 
 def signals_markdown(snapshot: Snapshot) -> str:
@@ -310,7 +328,7 @@ def signals_markdown(snapshot: Snapshot) -> str:
             lines.append(f"- [{markdown_text(star.name)}]({star.url}) · {local_date(star.at)}")
     else:
         lines.append("最近 90 日暂无新的公开星标。")
-    if snapshot.pr_count:
+    if snapshot.prs:
         lines.extend(["", "**近期公开 PR · Recent public PRs**", ""])
         for pr in snapshot.prs:
             title = " ".join(pr.title.split())
@@ -382,13 +400,13 @@ def activity_svg(snapshot: Snapshot) -> str:
         )
     else:
         event_line = '<text x="64" y="138" fill="#aebed4" font-size="19">Training systems · GPU performance · RL</text>'
-    footer = "Public events only · profile updates &amp; fork syncs excluded"
+    footer = "Public event feed · profile updates &amp; fork syncs excluded"
     if snapshot.events_limited:
         footer += " · event feed capped at 300"
     graph = "\n    ".join(bars)
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="200" viewBox="0 0 1280 200" role="img" aria-labelledby="title description">
   <title id="title">Recent public GitHub signals</title>
-  <desc id="description">Last 90 days: {len(snapshot.stars)} recently starred projects and {len(snapshot.events)} public code or discussion {event_word}. Latest public signal: {latest}. A 13-bin graph shows stars and code or discussion events separately. Profile updates and fork pushes are excluded.</desc>
+  <desc id="description">Last 90 days: {len(snapshot.stars)} recently starred projects and {len(snapshot.events)} observed code or discussion {event_word} from the public event feed. Latest public signal: {latest}. A 13-bin graph shows stars and observed code or discussion events separately. The public event feed is a sample of up to 300 events. Profile updates and fork pushes are excluded.</desc>
   <defs>
     <linearGradient id="background" x2="1" y2="1"><stop stop-color="#080d18"/><stop offset="1" stop-color="#10172a"/></linearGradient>
   </defs>
@@ -461,7 +479,8 @@ def main() -> int:
     changes = {root / "assets" / "activity.svg": svg, readme_path: updated_readme}
     print(
         f"Public snapshot: {len(snapshot.stars)} recent stars, "
-        f"{len(snapshot.events)} code/discussion events, {snapshot.pr_count} public PRs."
+        f"{len(snapshot.events)} observed code/discussion events, "
+        f"{len(snapshot.prs)} public PR links in the event feed."
     )
     if args.dry_run:
         print("Dry run complete; no files written.")

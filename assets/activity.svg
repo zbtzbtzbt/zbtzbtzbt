@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="200" viewBox="0 0 1280 200" role="img" aria-labelledby="title description">
   <title id="title">Recent public GitHub signals</title>
-  <desc id="description">Last 90 days: 19 recently starred projects and 0 public code or discussion events. Latest public signal: 2026-10-11. A 13-bin graph shows stars and code or discussion events separately. Profile updates and fork pushes are excluded.</desc>
+  <desc id="description">Last 90 days: 19 recently starred projects and 0 observed code or discussion events from the public event feed. Latest public signal: 2026-10-11. A 13-bin graph shows stars and observed code or discussion events separately. The public event feed is a sample of up to 300 events. Profile updates and fork pushes are excluded.</desc>
   <defs>
     <linearGradient id="background" x2="1" y2="1"><stop stop-color="#080d18"/><stop offset="1" stop-color="#10172a"/></linearGradient>
   </defs>
@@ -61,6 +61,6 @@
     </g>
     <text x="730" y="165" fill="#7d91ad" font-size="11">Earlier</text>
     <text x="1173" y="165" text-anchor="end" fill="#7d91ad" font-size="11">Recent</text>
-    <text x="730" y="184" fill="#7185a1" font-size="10">Public events only · profile updates &amp; fork syncs excluded</text>
+    <text x="730" y="184" fill="#7185a1" font-size="10">Public event feed · profile updates &amp; fork syncs excluded</text>
   </g>
 </svg>
